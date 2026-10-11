@@ -1,5 +1,0 @@
-node_modules/
-.tsbuild/
-# laid down by Claude Code while it loads the plugin from this folder (claude --plugin-dir ./pairwatch)
-pairwatch/.claude-plugin/types/
-pairwatch/tsconfig.json
