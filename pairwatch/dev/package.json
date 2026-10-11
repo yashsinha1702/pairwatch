@@ -1,0 +1,12 @@
+{
+  "name": "pairwatch-dev",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling for the Pairwatch mod: type-check, specs, corpus eval, visual gallery",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3"
+  }
+}
