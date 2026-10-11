@@ -45,7 +45,7 @@ Pairwatch only watches. Its hooks pass every event through unchanged, so it neve
 Type this at the prompt of a terminal session (`claude`):
 
 ```
-/plugin install pairwatch --marketplace <owner>/pairwatch
+/plugin install pairwatch --marketplace yashsinha1702/pairwatch
 ```
 
 Answer `y` to add the marketplace. Pick a scope: User puts Pairwatch in every session. Then keep the default settings. It is active at once: run `/pairwatch`.
@@ -53,7 +53,7 @@ Answer `y` to add the marketplace. Pick a scope: User puts Pairwatch in every se
 Or install from a shell:
 
 ```sh
-claude plugin marketplace add <owner>/pairwatch
+claude plugin marketplace add yashsinha1702/pairwatch
 claude plugin install pairwatch@pairwatch
 ```
 
