@@ -4,9 +4,9 @@
 
 Pairwatch is a Claude Code mod that explains your session while it runs. Instead of watching tool rows scroll past, you see what Claude is doing, why, and the idea behind it, in plain language.
 
-<!-- TODO: add docs/screenshot.png (the pane in a terminal session, and the page beside the VS Code chat), then move this line out of the comment:
-![Pairwatch beside a Claude Code session](docs/screenshot.png)
--->
+![Pairwatch's page following a Claude Code turn: the stage, the narration and a concept card for each step](docs/pairwatch-demo.gif)
+
+<sub>The page following a real turn from the test suite (`dev/spec/scenario.fixtures.ts`): Claude fixes a login redirect, from planning and a failing test to a sub-agent and the passing suite. Every frame comes from the mod's own timeline, narration rules, cards and stage, with the narrator model off. Rebuild it with `node dev/demo.ts`.</sub>
 
 ## What it is
 
@@ -45,7 +45,7 @@ Pairwatch only watches. Its hooks pass every event through unchanged, so it neve
 Type this at the prompt of a terminal session (`claude`):
 
 ```
-/plugin install pairwatch --marketplace <owner>/pairwatch
+/plugin install pairwatch --marketplace yashsinha1702/pairwatch
 ```
 
 Answer `y` to add the marketplace. Pick a scope: User puts Pairwatch in every session. Then keep the default settings. It is active at once: run `/pairwatch`.
@@ -53,7 +53,7 @@ Answer `y` to add the marketplace. Pick a scope: User puts Pairwatch in every se
 Or install from a shell:
 
 ```sh
-claude plugin marketplace add <owner>/pairwatch
+claude plugin marketplace add yashsinha1702/pairwatch
 claude plugin install pairwatch@pairwatch
 ```
 
@@ -204,15 +204,17 @@ dev/check.sh spec    # or one of them: tsc | validate | test | spec
 - **Kit tests** (`claude plugin test`) run only where installed mods run. See the rollout flag under [Requirements](#requirements).
 - **`claude --plugin-dir ./pairwatch`** loads your working copy and reloads it on save. `dev/deploy.sh <session-id>` copies it into a running session's mods folder instead, and that session hot-reloads it.
 
-Eval and gallery:
+Eval, gallery and demo:
 
 ```sh
 node dev/eval-corpus.ts [--limit N] [--out DIR]   # replays your own transcripts (~/.claude/projects) through the explainer
 node dev/gallery.ts [--no-png] [--out DIR]        # draws every station and state as SVG, plus PNG filmstrips
+node dev/demo.ts [--no-png] [--out DIR]           # the README's GIF: the page replaying the test scenario
 ```
 
-- Both write to a new private temp folder unless you pass `--out`, and print where. The eval's sample report quotes your own sessions, so keep it out of the repository.
-- The PNG filmstrips need Playwright with Chromium. Install them once, in a folder of your choice, and point `PAIRWATCH_TOOLS` at it:
+- All three write to a new private temp folder unless you pass `--out`, and print where. The eval's sample report quotes your own sessions, so keep it out of the repository.
+- The demo folds `dev/spec/scenario.fixtures.ts` through the real core the way the pump does (rules narration, no model calls), plays the snapshots into `viewer/index.html` and, with `ffmpeg` on PATH, writes `pairwatch-demo.gif`.
+- The PNG filmstrips and the demo's frames need Playwright with Chromium. Install them once, in a folder of your choice, and point `PAIRWATCH_TOOLS` at it (or set `PAIRWATCH_CHROMIUM` to a Chromium binary for the demo):
 
   ```sh
   mkdir -p ~/pw-tools && cd ~/pw-tools && npm init -y && npm install playwright
