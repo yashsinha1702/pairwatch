@@ -190,6 +190,10 @@ async function firstTurn($: Engine, clock: MockClock, prompt: string): Promise<v
 
 const bashOk = (): ToolCallResult => ({ result: { stdout: 'ok', stderr: '', interrupted: false }, text: 'ok' })
 
+/** The ask the engine raises once a check has answered 'ask': it names the tool and its input, never the call. */
+const ask = ($: Engine, command: string, mode?: string) =>
+  $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command }, ...(mode === undefined ? {} : { permission_mode: mode }) })
+
 describe('Pairwatch pane', () => {
   test('draws on every surface with an empty model; the stage is an Svg on remote surfaces only', async ($, on) => {
     world(on)
@@ -831,14 +835,19 @@ describe('observers change nothing', () => {
     await clock.advance(500)
   })
 
+  // The hooks these tests put beneath Pairwatch are in the forms the plugin directory's guidance names,
+  // in case it reads this folder too: each tool.check hook answers a fixed 'ask' or 'deny' written in
+  // its return, and each classic.PermissionRequest hook a fixed 'deny', never an allow.
   test('a permission ask and a sub-agent reach the model', async ($, on) => {
     const { clock, written } = world(on)
     on('tool.check', () => ({ decision: 'ask' }))
+    on('classic.PermissionRequest', () => ({ decision: { behavior: 'deny' } }))
     on('agent.spawn', () => ({ model: 'haiku', agentId: 'agent-7' }))
     on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false }, text: '' }))
     await startSession($)
     await firstTurn($, clock, 'clean the build folder')
     expect(await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'toolu_rm' })).toEqual({ decision: 'ask' })
+    expect(await ask($, 'rm -rf build')).toEqual({ decision: { behavior: 'deny' } })
     await clock.advance(500)
     type M = { steps: { tool: string; station: string; agentId?: string }[]; agents: { id: string }[] }
     expect((written('model').at(-1) as M).steps.some(s => s.tool === '#permission' && s.station === 'ask')).toBe(true)
@@ -862,21 +871,171 @@ describe('observers change nothing', () => {
     expect(model.steps.some(s => s.agentId === 'agent-7' && s.station === 'read')).toBe(true)
   })
 
-  test('in auto mode an ask goes to the classifier: no “Waiting for your OK” on stage', async ($, on) => {
+  test('in auto, don’t-ask and bypass modes an ask shows no “Waiting for your OK” on stage', async ($, on) => {
     const { clock, written } = world(on)
     on('tool.check', () => ({ decision: 'ask' }))
+    on('classic.PermissionRequest', () => ({ decision: { behavior: 'deny' } }))
     on('classic.UserPromptSubmit', () => ({}))
     await startSession($)
     await firstTurn($, clock, 'clean the build folder')
+    type M = { steps: { tool: string }[] }
+    const waits = () => (written('model').at(-1) as M).steps.filter(s => s.tool === '#permission').length
+    // the mode as another classic event last reported it
     await $.classic.UserPromptSubmit({ session_id: 's1', transcript_path: '/t/s1.jsonl', cwd: '/work/app', permission_mode: 'auto', prompt: 'clean the build folder' })
     await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'toolu_rm' })
+    await ask($, 'rm -rf build')
     await clock.advance(500)
+    expect(waits()).toBe(0)
+    // the mode as the ask itself reports it
+    for (const mode of ['auto', 'dontAsk', 'bypassPermissions']) {
+      await $.tool.check({ tool: 'Bash', input: { command: `rm -rf ${mode}` }, tool_use_id: `toolu_${mode}` })
+      await ask($, `rm -rf ${mode}`, mode)
+      await clock.advance(500)
+      expect(waits()).toBe(0)
+    }
+    await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf dist' }, tool_use_id: 'toolu_rm2' })
+    await ask($, 'rm -rf dist', 'default')
+    await clock.advance(500)
+    expect(waits()).toBe(1)
+  })
+
+  test('tool.check passes each check straight on: the verdict comes back as given, the hooks beneath are asked once', async ($, on) => {
+    const { clock, written } = world(on)
+    let looks = 0
+    on('tool.check', { tool: 'WebFetch' }, () => {
+      looks += 1
+      return { decision: 'deny', reason: 'blocked by a rule', rule: 'WebFetch(domain:example.com)' }
+    })
+    on('tool.check', { tool: 'Bash' }, () => {
+      looks += 1
+      return { decision: 'ask', reason: 'rm in the project needs approval' }
+    })
+    await startSession($)
+    await firstTurn($, clock, 'tidy up')
+    expect(await $.tool.check({ tool: 'WebFetch', input: { url: 'https://example.com/x' }, tool_use_id: 'toolu_fetch' })).toEqual({
+      decision: 'deny',
+      reason: 'blocked by a rule',
+      rule: 'WebFetch(domain:example.com)',
+    })
+    expect(await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'toolu_rm' })).toEqual({
+      decision: 'ask',
+      reason: 'rm in the project needs approval',
+    })
+    // a query: no call behind it, so no id
+    expect(await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' } })).toEqual({
+      decision: 'ask',
+      reason: 'rm in the project needs approval',
+    })
+    expect(looks).toBe(3) // one look for each check: Pairwatch asks for no verdict of its own
+    await clock.advance(500)
+    // a verdict alone shows no wait: only the ask the engine then puts does
     type M = { steps: { tool: string }[] }
     expect((written('model').at(-1) as M).steps.some(s => s.tool === '#permission')).toBe(false)
-    await $.classic.UserPromptSubmit({ session_id: 's1', transcript_path: '/t/s1.jsonl', cwd: '/work/app', permission_mode: 'default', prompt: 'now ask me' })
-    await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf dist' }, tool_use_id: 'toolu_rm2' })
+  })
+
+  test('classic.PermissionRequest passes each ask straight on: the answer beneath comes back as given, asked once', async ($, on) => {
+    world(on)
+    let looks = 0
+    on('classic.PermissionRequest', () => {
+      looks += 1
+      return { decision: { behavior: 'deny', message: 'declined beneath' } }
+    })
+    await startSession($)
+    expect(await ask($, 'rm -rf build')).toEqual({ decision: { behavior: 'deny', message: 'declined beneath' } })
+    expect(looks).toBe(1)
+  })
+
+  test('an ask shows the wait on the call it is about, told by its tool and input', async ($, on) => {
+    const { clock, written } = world(on)
+    on('tool.check', () => ({ decision: 'ask' }))
+    on('classic.PermissionRequest', () => ({ decision: { behavior: 'deny' } }))
+    await startSession($)
+    await firstTurn($, clock, 'clean up')
+    // four calls are being checked at once; the asks come in another order
+    await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'toolu_build' })
+    await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf dist' }, tool_use_id: 'toolu_dist' })
+    await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf cache' }, tool_use_id: 'toolu_cache' })
+    await $.tool.check({ tool: 'WebFetch', input: { url: 'https://example.com/x' }, tool_use_id: 'toolu_fetch' })
+    type M = { steps: { id: string }[] }
+    const waits = () =>
+      (written('model').at(-1) as M).steps
+        .map(s => s.id)
+        .filter(id => id.startsWith('#permission-'))
+        .sort()
+    // by its input: the oldest of the three Bash calls, not the newest
+    await ask($, 'rm -rf build')
     await clock.advance(500)
-    expect((written('model').at(-1) as M).steps.some(s => s.tool === '#permission')).toBe(true)
+    expect(waits()).toEqual(['#permission-toolu_build'])
+    await $.classic.PermissionRequest({ tool_name: 'WebFetch', tool_input: { url: 'https://example.com/x' } })
+    await clock.advance(500)
+    expect(waits()).toEqual(['#permission-toolu_build', '#permission-toolu_fetch'])
+    // an ask for a tool that no call being checked uses shows nothing
+    await $.classic.PermissionRequest({ tool_name: 'Write', tool_input: { file_path: '/work/app/notes.md', content: 'x' } })
+    await clock.advance(500)
+    expect(waits()).toEqual(['#permission-toolu_build', '#permission-toolu_fetch'])
+    await ask($, 'rm -rf cache')
+    await clock.advance(500)
+    expect(waits()).toEqual(['#permission-toolu_build', '#permission-toolu_cache', '#permission-toolu_fetch'])
+    // an ask whose input matches none falls to the one Bash call not asked about yet, though it is not the newest
+    await ask($, 'rm -rf dist --verbose')
+    await clock.advance(500)
+    expect(waits()).toEqual(['#permission-toolu_build', '#permission-toolu_cache', '#permission-toolu_dist', '#permission-toolu_fetch'])
+  })
+
+  test('two calls with the same input each get their own wait', async ($, on) => {
+    const { clock, written } = world(on)
+    on('tool.check', () => ({ decision: 'ask' }))
+    on('classic.PermissionRequest', () => ({ decision: { behavior: 'deny' } }))
+    await startSession($)
+    await firstTurn($, clock, 'run the tests twice')
+    await $.tool.check({ tool: 'Bash', input: { command: 'npm test' }, tool_use_id: 'toolu_first' })
+    await $.tool.check({ tool: 'Bash', input: { command: 'npm test' }, tool_use_id: 'toolu_second' })
+    type M = { steps: { id: string }[] }
+    const waits = () =>
+      (written('model').at(-1) as M).steps
+        .map(s => s.id)
+        .filter(id => id.startsWith('#permission-'))
+        .sort()
+    await ask($, 'npm test')
+    await clock.advance(500)
+    expect(waits().length).toBe(1)
+    await ask($, 'npm test')
+    await clock.advance(500)
+    expect(waits()).toEqual(['#permission-toolu_first', '#permission-toolu_second'])
+  })
+
+  test('two helpers ask about the same command: the wait lands on the asking helper’s own call', async ($, on) => {
+    const { clock, written } = world(on)
+    on('tool.check', () => ({ decision: 'ask' }))
+    on('classic.PermissionRequest', () => ({ decision: { behavior: 'deny' } }))
+    await startSession($)
+    await firstTurn($, clock, 'run the tests')
+    // each call in its own helper's loop (agentId is the engine's to stamp, so it is not in the check's type)
+    const inA = { tool: 'Bash', input: { command: 'npm test' }, tool_use_id: 'toolu_a', agentId: 'agent-a' }
+    const inB = { tool: 'Bash', input: { command: 'npm test' }, tool_use_id: 'toolu_b', agentId: 'agent-b' }
+    await $.tool.check(inA)
+    await $.tool.check(inB)
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'npm test' }, agent_id: 'agent-a' })
+    await clock.advance(500)
+    type M = { steps: { id: string }[] }
+    const waits = (written('model').at(-1) as M).steps.map(s => s.id).filter(id => id.startsWith('#permission-'))
+    expect(waits).toEqual(['#permission-toolu_a'])
+  })
+
+  test('a real call that asks shows the wait on that call: its check and its ask are tied', async ($, on) => {
+    const { clock, written } = world(on)
+    on('tool.check', { tool: 'Bash' }, () => ({ decision: 'ask' }))
+    on('tool.call', () => bashOk())
+    await startSession($)
+    await firstTurn($, clock, 'clean the build folder')
+    // no hook beneath answers the ask, so the kit refuses the call
+    await $.tool.call({ tool: 'Bash', command: 'rm -rf build', description: 'Remove the build folder' })
+    await clock.advance(500)
+    type M = { steps: { id: string; tool: string }[] }
+    const steps = (written('model').at(-1) as M).steps
+    const call = steps.find(s => s.tool === 'Bash')
+    expect(call).toBeDefined()
+    expect(steps.filter(s => s.tool === '#permission').map(s => s.id)).toEqual([`#permission-${call?.id}`])
   })
 
   test('/clear starts the stage blank and the pump keeps going', async ($, on) => {

@@ -11,6 +11,7 @@ It adds a pane to your session, plus a local page for editors that don't draw mo
 - **A concept card.** One idea the current step uses: a shell idiom, a git command, an agent habit like "read before edit". There are about 160 cards, picked by your level and by what you haven't seen yet.
 
 Pairwatch only watches. Its hooks pass every event through unchanged, so it never changes what Claude does. If Pairwatch fails, the session carries on without it.
+Its permission hooks only watch permission checks to show that Claude is waiting for you, and they never answer them.
 
 ## Requirements
 

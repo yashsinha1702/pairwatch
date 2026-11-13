@@ -86,7 +86,7 @@ export type RawEvent =
   | { kind: 'think'; agentId?: string; text: string; at: number } // a finished thinking block
   | { kind: 'tool-start'; obs: ToolObs }
   | { kind: 'tool-end'; end: ToolEnd }
-  | { kind: 'permission'; id: string; tool: string; at: number } // tool.check answered 'ask'
+  | { kind: 'permission'; id: string; tool: string; at: number } // the engine put an ask for this call
   | { kind: 'agent-start'; agentId: string; type: string; description: string; toolUseId: string; background: boolean; at: number }
   | { kind: 'agent-stop'; agentId: string; at: number }
 

@@ -17,7 +17,11 @@
 //
 // Validator rules kept here: `$` is passed only to functions declared at the top of this file;
 // `$` and its nouns are never bound or destructured; atoms are the literal consts below, named
-// at each call site and never passed as parameters; no event is registered twice unmatched.
+// at each call site and never passed as parameters; no event is registered twice unmatched; the
+// two permission hooks (tool.check and classic.PermissionRequest) are written where they are
+// registered, as on(event, hook) with the plain parameter names `($, e, next)`, which inside them
+// name nothing else, and the only use each makes of `next` is its one `return next(e)` with its own
+// `e` (the plugin directory's guidance for showing that a permission decision stays with the person).
 import { atom, read, update } from 'claude-code'
 import type {
   BoxProps,
@@ -75,6 +79,8 @@ const TITLE = 'Pairwatch'
 const TICK_MS = 400
 /** the queue drops its oldest events past this (a stalled pump never grows memory without bound) */
 const QUEUE_MAX = 2_000
+/** the calls remembered for tying an ask to one drop their oldest past this (a call whose end is never seen does not stay for good) */
+const CHECKED_MAX = 50
 const ARG_TEXT_MAX = 4_000
 /** of a long `command`, this much of its start is kept (the rest of ARG_TEXT_MAX is its end) */
 const COMMAND_HEAD = 2_800
@@ -269,6 +275,13 @@ let tickPerf = Number.NEGATIVE_INFINITY
 let narratorModel = 'haiku'
 /** the session's permission mode, as the classic events last reported it ('' until one does) */
 let permissionMode = ''
+type CheckedCall = { tool: string; input: unknown; agentId: string | undefined; isAsked: boolean }
+/**
+ * Real calls whose permission check has gone by and that have not ended, oldest first. The ask the
+ * engine raises names a tool, its input and the loop it came from, but no call, so it is tied to
+ * one of these.
+ */
+const checked = new Map<string, CheckedCall>()
 let cwd: string | undefined
 
 // Hooks stamp events without awaiting: the last $.clock.now() the pump read, plus the time since.
@@ -409,6 +422,52 @@ function stamp(): number {
 
 function notePermissionMode(mode: unknown): void {
   if (typeof mode === 'string' && mode !== '') permissionMode = mode
+}
+
+/** A real call's permission check went by: it is remembered until the call ends. */
+function noteChecked(id: string, tool: string, input: unknown, agentId: string | undefined): void {
+  checked.delete(id)
+  checked.set(id, { tool, input, agentId, isAsked: false })
+  if (checked.size > CHECKED_MAX) {
+    for (const oldest of checked.keys()) {
+      checked.delete(oldest)
+      break
+    }
+  }
+}
+
+/** A tool's input as one line to compare ('' when it cannot be written as JSON). */
+function inputLine(input: unknown): string {
+  try {
+    return JSON.stringify(input) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The call an ask is about. An ask names the tool, its input as the check read it and the loop it
+ * comes from, so this is a remembered call of that tool with that input; with no input that
+ * matches, one of that tool not asked about yet. Among those, the asking loop's own call comes
+ * first, then one not asked about yet, then the newest.
+ */
+function askedCall(tool: string, input: unknown, agentId: string | undefined): string | undefined {
+  const line = inputLine(input)
+  let found: string | undefined
+  let foundRank = 0
+  for (const [id, call] of checked) {
+    if (call.tool !== tool) continue
+    const isSame = line !== '' && inputLine(call.input) === line
+    if (!isSame && call.isAsked) continue
+    const rank = (isSame ? 4 : 0) + (call.agentId === agentId ? 2 : 0) + (call.isAsked ? 0 : 1)
+    if (rank >= foundRank) {
+      found = id
+      foundRank = rank
+    }
+  }
+  const call = found === undefined ? undefined : checked.get(found)
+  if (call !== undefined) call.isAsked = true
+  return found
 }
 
 function push(ev: RawEvent): void {
@@ -1950,6 +2009,7 @@ export const register: Register = (on, options) => {
       ran = await next(e) // the permission prompt, PreToolUse and the tool itself run in here
       return ran // the same object: core keeps its own messages (ref)
     } finally {
+      checked.delete(id) // the call ended: no ask is about it any more
       try {
         push({ kind: 'tool-end', end: endOf(id, ran) })
       } catch {
@@ -1958,13 +2018,26 @@ export const register: Register = (on, options) => {
     }
   })
 
-  on('tool.check', async ($, e, next) => {
-    const verdict = await next(e)
-    // 'ask' goes to the mode's decider: the person, unless the session runs in a mode where no one is asked
-    if (e.tool_use_id !== undefined && verdict.decision === 'ask' && !NOBODY_ASKED.has(permissionMode)) {
-      push({ kind: 'permission', id: e.tool_use_id, tool: String(e.tool), at: stamp() })
+  // Watching only: the two permission hooks never answer. Each one's only return is `return next(e)`,
+  // so a check and an ask go on exactly as they came, nothing beneath runs twice, and the decision
+  // stays where it was (with the person, when a person is asked). tool.check remembers which call is
+  // being checked. When the engine then puts an ask (classic.PermissionRequest: raised as the dialog
+  // goes up or a host is asked, and in a headless run just before the call is refused; not when auto
+  // mode's classifier settles it), the stage shows that Claude is waiting on that call.
+  on('tool.check', ($, e, next) => {
+    // a real call only: a $.tool.check query carries no id
+    if (e.tool_use_id !== undefined) noteChecked(e.tool_use_id, String(e.tool), e.input, e.agentId)
+    return next(e)
+  })
+
+  on('classic.PermissionRequest', ($, e, next) => {
+    notePermissionMode(e.permission_mode)
+    // the ask goes to the person, unless the session runs in a mode where no one is asked
+    if (!NOBODY_ASKED.has(permissionMode)) {
+      const id = askedCall(e.tool_name, e.tool_input, e.agent_id)
+      if (id !== undefined) push({ kind: 'permission', id, tool: e.tool_name, at: stamp() })
     }
-    return verdict
+    return next(e)
   })
 
   // The session's permission mode, as the classic events report it (shift+tab changes it mid-session).
@@ -1978,6 +2051,10 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // Unlike the permission hooks, this one holds what next(e) resolved to and hands that same value
+  // back. That value is where the started agent's id meets this spawn's own input (its description,
+  // type, Agent call and whether it runs in the background), and where a refused spawn shows:
+  // SubagentStart has the id and type alone. Nothing is changed on the way in or out.
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
     if (started.agentId !== undefined) {
