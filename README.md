@@ -167,6 +167,7 @@ The repository:
   - `viewer/` holds the page and its server.
   - `types/index.d.ts` is the shared-type contract.
   - `tests/` holds the kit tests.
+  - `README.md` is the short guide that ships with the plugin and that plugin listings show.
 - `dev/` holds the checks, specs and tools (see [Development](#development)).
 - `.claude-plugin/marketplace.json` makes this repository a marketplace.
 
