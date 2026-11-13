@@ -111,7 +111,7 @@ echo '{"viewerPort": "8080"}' | claude plugin configure pairwatch@pairwatch --va
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Viewer page** (`viewer`) | on | Serves Pairwatch's own page on this machine, for editors that don't draw mod panes. When off, there is no server and no snapshot files. |
+| **Viewer page** (`viewer`) | on | Serves Pairwatch's own page on this machine, for editors that don't draw mod panes. When off, Pairwatch starts no server and writes no snapshot files. A server that is already running is left alone: it exits by itself after 8 idle hours, or you can stop it (see [Uninstall](#uninstall)). |
 | **Viewer port** (`viewerPort`) | `7979` | Sets the page's port (1024 to 65535). |
 | **Narration model** (`narratorModel`) | `haiku` | Picks `haiku` or `sonnet`. Sonnet costs about ten times as much. |
 
@@ -121,8 +121,8 @@ Everything stays on your machine. The only exception is calls to Claude made wit
 
 | What | Where | Details |
 | --- | --- | --- |
-| Snapshots for the page | `~/.claude/pairwatch/live/<session>.json` | `~/.claude/pairwatch` is readable by you alone (0700). Each snapshot holds what the page shows: the working folder, the start of your prompt, the narration, the card and the stage (the current command, file paths, diff lines and output lines). They are written only while the Viewer page setting is on and once its server has answered, and they stop after `/pairwatch close`. The server deletes snapshots older than 7 days. |
-| The page's key | `~/.claude/pairwatch/viewer.token` (0600) | The server listens on 127.0.0.1 only. It answers API calls only when they carry this key and come from a local Host and Origin. |
+| Snapshots for the page | `~/.claude/pairwatch/live/<session>.json` | Pairwatch sets `~/.claude/pairwatch` to be readable by you alone (0700). That is best effort: a file system that ignores such modes isn't protected. Each snapshot holds what the page shows: the working folder, the start of your prompt, the narration, the card and the stage (the current command, file paths, diff lines and output lines). They are written only while the Viewer page setting is on and once its server has answered, and they stop after `/pairwatch close`. The server deletes snapshots older than 7 days. |
+| The page's key | `~/.claude/pairwatch/viewer.token` (0600) | The server listens on 127.0.0.1 only. It answers API calls only when they carry this key and their Host names this machine. An Origin, when one is sent, must name this machine too. |
 | The server's log | `~/.claude/pairwatch/viewer.log` | Start-up messages and errors |
 | Your level, preferences, cards seen and known, the journal | Claude Code's plugin store, `~/.claude/plugins/store/pairwatch_*.json` | Kept by Claude Code |
 
