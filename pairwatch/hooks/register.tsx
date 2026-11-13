@@ -17,7 +17,10 @@
 //
 // Validator rules kept here: `$` is passed only to functions declared at the top of this file;
 // `$` and its nouns are never bound or destructured; atoms are the literal consts below, named
-// at each call site and never passed as parameters; no event is registered twice unmatched.
+// at each call site and never passed as parameters; no event is registered twice unmatched; the
+// tool.check hook is written where it is registered, as on(event, hook) with the plain parameter
+// names `($, e, next)` used for nothing else, and its only return is `return next(e)` with its own
+// `e` (the plugin directory's guidance for showing that a permission decision stays with the person).
 import { atom, read, update } from 'claude-code'
 import type {
   BoxProps,
@@ -1958,13 +1961,22 @@ export const register: Register = (on, options) => {
     }
   })
 
+  // Watching only: this hook never answers a permission check. Its only return is `return next(e)`,
+  // so the verdict is whatever the hooks beneath and the engine give, and the decision stays with the
+  // person. To show that Claude is waiting for them it reads the verdict first, then passes the check
+  // on untouched. At tool.check next(e) runs no tool and opens no dialog, but each call asks the hooks
+  // beneath and the engine again, so the read is made only where a wait could show.
   on('tool.check', async ($, e, next) => {
-    const verdict = await next(e)
-    // 'ask' goes to the mode's decider: the person, unless the session runs in a mode where no one is asked
-    if (e.tool_use_id !== undefined && verdict.decision === 'ask' && !NOBODY_ASKED.has(permissionMode)) {
-      push({ kind: 'permission', id: e.tool_use_id, tool: String(e.tool), at: stamp() })
+    // A real call (a $.tool.check query carries no id), outside the modes where nobody is asked.
+    if (e.tool_use_id !== undefined && !NOBODY_ASKED.has(permissionMode)) {
+      try {
+        const seen = await next(e)
+        if (seen.decision === 'ask') push({ kind: 'permission', id: e.tool_use_id, tool: String(e.tool), at: stamp() })
+      } catch {
+        // watching never breaks the check
+      }
     }
-    return verdict
+    return next(e)
   })
 
   // The session's permission mode, as the classic events report it (shift+tab changes it mid-session).
@@ -1978,6 +1990,11 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // Unlike tool.check, this hook holds what next(e) resolved to and hands that same value back. That
+  // value is where the started agent's id meets this spawn's own input (its description, type, Agent
+  // call and whether it runs in the background), and where a refused spawn shows: SubagentStart has
+  // the id and type alone. Each next(e) runs the hooks beneath again, the agent's start included, so
+  // it is called once. Nothing is changed on the way in or out.
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
     if (started.agentId !== undefined) {

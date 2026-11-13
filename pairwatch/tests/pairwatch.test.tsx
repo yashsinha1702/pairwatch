@@ -879,6 +879,76 @@ describe('observers change nothing', () => {
     expect((written('model').at(-1) as M).steps.some(s => s.tool === '#permission')).toBe(true)
   })
 
+  // The tool.check hooks these tests put beneath Pairwatch answer a fixed 'ask' or 'deny' written in
+  // the return, the forms the plugin directory accepts, in case it reads this folder too.
+  test('tool.check never answers: a deny and an ask beneath come back as given, and only the ask shows a wait', async ($, on) => {
+    const { clock, written } = world(on)
+    on('tool.check', { tool: 'WebFetch' }, () => ({ decision: 'deny', reason: 'blocked by a rule', rule: 'WebFetch(domain:example.com)' }))
+    on('tool.check', { tool: 'Bash' }, () => ({ decision: 'ask', reason: 'rm in the project needs approval' }))
+    await startSession($)
+    await firstTurn($, clock, 'tidy up')
+    type M = { steps: { tool: string }[] }
+    const waits = () => (written('model').at(-1) as M).steps.filter(s => s.tool === '#permission').length
+    expect(await $.tool.check({ tool: 'WebFetch', input: { url: 'https://example.com/x' }, tool_use_id: 'toolu_fetch' })).toEqual({
+      decision: 'deny',
+      reason: 'blocked by a rule',
+      rule: 'WebFetch(domain:example.com)',
+    })
+    await clock.advance(500)
+    expect(waits()).toBe(0)
+    expect(await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'toolu_rm' })).toEqual({
+      decision: 'ask',
+      reason: 'rm in the project needs approval',
+    })
+    await clock.advance(500)
+    expect(waits()).toBe(1)
+  })
+
+  test('tool.check passes the check itself on, not the verdict it read to show the wait', async ($, on) => {
+    const { clock, written } = world(on)
+    // beneath, the verdict changes between two looks: Pairwatch's read sees an ask, the check it passes on is refused
+    let looks = 0
+    on('tool.check', () => {
+      looks += 1
+      if (looks === 1) return { decision: 'ask' }
+      return { decision: 'deny', reason: 'refused on the second look' }
+    })
+    await startSession($)
+    await firstTurn($, clock, 'clean the build folder')
+    expect(await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'toolu_rm' })).toEqual({
+      decision: 'deny',
+      reason: 'refused on the second look',
+    })
+    expect(looks).toBe(2) // one read to watch, then the check passed on
+    await clock.advance(500)
+    type M = { steps: { tool: string }[] }
+    expect((written('model').at(-1) as M).steps.some(s => s.tool === '#permission')).toBe(true) // the read saw the ask
+  })
+
+  test('tool.check reads nothing extra where no wait could show: a query, or a mode where nobody is asked', async ($, on) => {
+    const { clock, written } = world(on)
+    let looks = 0
+    on('tool.check', () => {
+      looks += 1
+      return { decision: 'ask' }
+    })
+    on('classic.UserPromptSubmit', () => ({}))
+    await startSession($)
+    await firstTurn($, clock, 'clean the build folder')
+    // a query: no call behind it, so no id
+    expect(await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' } })).toEqual({ decision: 'ask' })
+    expect(looks).toBe(1)
+    for (const mode of ['auto', 'dontAsk', 'bypassPermissions']) {
+      await $.classic.UserPromptSubmit({ session_id: 's1', transcript_path: '/t/s1.jsonl', cwd: '/work/app', permission_mode: mode, prompt: 'clean the build folder' })
+      const before = looks
+      expect(await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: `toolu_${mode}` })).toEqual({ decision: 'ask' })
+      expect(looks).toBe(before + 1)
+    }
+    await clock.advance(500)
+    type M = { steps: { tool: string }[] }
+    expect((written('model').at(-1) as M).steps.some(s => s.tool === '#permission')).toBe(false)
+  })
+
   test('/clear starts the stage blank and the pump keeps going', async ($, on) => {
     const { clock, written } = world(on)
     on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false }, text: '' }))
